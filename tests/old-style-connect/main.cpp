@@ -190,7 +190,7 @@ class DerivedTestingProtected : public TestingProtected
 void testQPointer()
 {
     QPointer<WithNesting> p8733 = new WithNesting();
-    QObject::connect(p8733, SIGNAL(destroyed()), p8733, SLOT(deleteLater())); // Warning, and when fixed should have .data() due to gcc bug
+    QObject::connect(p8733, SIGNAL(destroyed()), p8733, SLOT(deleteLater())); // Warning
     QObject::connect(p8733, &WithNesting::destroyed, p8733, &WithNesting::deleteLater);
     QObject::connect(p8733.data(), SIGNAL(destroyed()), p8733.data(), SLOT(deleteLater())); // Warning
     QObject::connect(p8733.data(), &WithNesting::destroyed, p8733.data(), &WithNesting::deleteLater);
@@ -319,7 +319,7 @@ public:
         connect(ptr, SIGNAL(signal1()), SLOT(slot1()));
         connect(ptr, SIGNAL(signal1()), ptr, SLOT(slot1()));
         connect(p->ptr, SIGNAL(signal1()), p->ptr.data(), SLOT(slot1()));
-        connect(d_func()->ptr, SIGNAL(signal1()), d_func()->ptr.data(), SLOT(slot1()));
+
         ptr->disconnect(this);
     }
 

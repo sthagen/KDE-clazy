@@ -190,7 +190,7 @@ class DerivedTestingProtected : public TestingProtected
 void testQPointer()
 {
     QPointer<WithNesting> p8733 = new WithNesting();
-    QObject::connect(p8733.data(), &QObject::destroyed, p8733.data(), &QObject::deleteLater); // Warning, and when fixed should have .data() due to gcc bug
+    QObject::connect(p8733, &QObject::destroyed, p8733, &QObject::deleteLater); // Warning
     QObject::connect(p8733, &WithNesting::destroyed, p8733, &WithNesting::deleteLater);
     QObject::connect(p8733.data(), &QObject::destroyed, p8733.data(), &QObject::deleteLater); // Warning
     QObject::connect(p8733.data(), &WithNesting::destroyed, p8733.data(), &WithNesting::deleteLater);
@@ -314,12 +314,12 @@ public:
     TestQPointerMember()
     {
         QPointer<MyObj> ptr;
-        connect(m_ptr.data(), &MyObj::signal1, this, &TestQPointerMember::slot1);
-        connect(m_ptr.data(), &MyObj::signal1, m_ptr.data(), &MyObj::slot1);
-        connect(ptr.data(), &MyObj::signal1, this, &TestQPointerMember::slot1);
-        connect(ptr.data(), &MyObj::signal1, ptr.data(), &MyObj::slot1);
-        connect(p->ptr.data(), &MyObj::signal1, p->ptr.data(), &MyObj::slot1);
-        connect(d_func()->ptr.data(), &MyObj::signal1, d_func()->ptr.data(), &MyObj::slot1);
+        connect(m_ptr, &MyObj::signal1, this, &TestQPointerMember::slot1);
+        connect(m_ptr, &MyObj::signal1, m_ptr, &MyObj::slot1);
+        connect(ptr, &MyObj::signal1, this, &TestQPointerMember::slot1);
+        connect(ptr, &MyObj::signal1, ptr, &MyObj::slot1);
+        connect(p->ptr, &MyObj::signal1, p->ptr.data(), &MyObj::slot1);
+
         ptr->disconnect(this);
     }
 

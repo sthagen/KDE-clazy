@@ -334,154 +334,144 @@ std::vector<FixItHint> OldStyleConnect::fixits(int classification, T *callOrCtor
     for (auto arg : callOrCtor->arguments()) {
         SourceLocation s = arg->getBeginLoc();
         static const CXXRecordDecl *lastRecordDecl = nullptr;
-        if (isSignalOrSlot(s, macroName)) {
-            macroNum++;
-            if (!lastRecordDecl && (classification & ConnectFlag_4ArgsConnect)) {
-                // This means it's a connect with implicit receiver
-                lastRecordDecl = Utils::recordForMemberCall(dyn_cast<CXXMemberCallExpr>(callOrCtor), implicitCallee);
-
-                if (macroNum == 1) {
-                    llvm::errs() << "This first macro shouldn't enter this path";
-                }
-                if (!lastRecordDecl) {
-                    std::string msg = "Failed to get class name for implicit receiver";
-                    queueManualFixitWarning(s, msg);
-                    return {};
-                }
+        if (!isSignalOrSlot(s, macroName)) {
+            if (auto *record = clazy::getBestDynamicClassType(arg)) {
+                lastRecordDecl = record;
             }
-
-            if (!lastRecordDecl || !lastRecordDecl->hasDefinition()) {
-                std::string msg = "Failed to get class name for explicit receiver";
-                queueManualFixitWarning(s, msg);
-                return {};
-            }
-
-            const std::string methodName = signalOrSlotNameFromMacro(s);
-
-            // With LLVM22, we need to explicitly ask for the definition
-            auto methods = Utils::methodsFromString(lastRecordDecl->getDefinition(), methodName);
-            if (methods.empty()) {
-                std::string msg;
-                if (isPrivateSlot(methodName)) {
-                    msg = "Converting Q_PRIVATE_SLOTS not implemented yet\n";
-                } else {
-                    if (m_context->isQtDeveloper() && classIsOk(clazy::name(lastRecordDecl))) {
-                        // This is OK
-                        return {};
-                    }
-                    msg = "No such method " + methodName + " in class " + lastRecordDecl->getNameAsString();
-                }
-
-                queueManualFixitWarning(s, msg);
-                return {};
-            }
-            if (methods.size() != 1) {
-                std::string msg = std::string("Too many overloads (") + std::to_string(methods.size()) + std::string(") for method ") + methodName
-                    + " for record " + lastRecordDecl->getNameAsString();
-                queueManualFixitWarning(s, msg);
-                return {};
-            } else {
-                AccessSpecifierManager *a = m_context->accessSpecifierManager;
-                if (!a) {
-                    return {};
-                }
-                const bool isSignal = a->qtAccessSpecifierType(methods[0]) == QtAccessSpecifier_Signal;
-                if (isSignal && macroName == "SLOT") {
-                    // The method is actually a signal and the user used SLOT()
-                    // bail out with the fixing.
-                    std::string msg = std::string("Can't fix. SLOT macro used but method " + methodName + " is a signal");
-                    queueManualFixitWarning(s, msg);
-                    return {};
-                }
-            }
-
-            auto *methodDecl = methods[0];
-            if (methodDecl->isStatic()) {
-                return {};
-            }
+            continue;
+        }
+        macroNum++;
+        if (!lastRecordDecl && (classification & ConnectFlag_4ArgsConnect)) {
+            // This means it's a connect with implicit receiver
+            lastRecordDecl = Utils::recordForMemberCall(dyn_cast<CXXMemberCallExpr>(callOrCtor), implicitCallee);
 
             if (macroNum == 1) {
-                // Save the number of parameters of the signal. The slot should not have more arguments.
-                senderMethod = methodDecl;
-            } else if (macroNum == 2) {
-                const unsigned int numReceiverParams = methodDecl->getNumParams();
-                if (numReceiverParams > senderMethod->getNumParams()) {
-                    std::string msg = std::string("Receiver has more parameters (") + std::to_string(methodDecl->getNumParams()) + ") than signal ("
-                        + std::to_string(senderMethod->getNumParams()) + ')';
-                    queueManualFixitWarning(s, msg);
+                llvm::errs() << "This first macro shouldn't enter this path";
+            }
+            if (!lastRecordDecl) {
+                std::string msg = "Failed to get class name for implicit receiver";
+                queueManualFixitWarning(s, msg);
+                return {};
+            }
+        }
+
+        if (!lastRecordDecl || !lastRecordDecl->hasDefinition()) {
+            std::string msg = "Failed to get class name for explicit receiver";
+            queueManualFixitWarning(s, msg);
+            return {};
+        }
+
+        const std::string methodName = signalOrSlotNameFromMacro(s);
+
+        // With LLVM22, we need to explicitly ask for the definition
+        auto methods = Utils::methodsFromString(lastRecordDecl->getDefinition(), methodName);
+        if (methods.empty()) {
+            std::string msg;
+            if (isPrivateSlot(methodName)) {
+                msg = "Converting Q_PRIVATE_SLOTS not implemented yet\n";
+            } else {
+                if (m_context->isQtDeveloper() && classIsOk(clazy::name(lastRecordDecl))) {
+                    // This is OK
                     return {};
                 }
-
-                for (unsigned int i = 0; i < numReceiverParams; ++i) {
-                    ParmVarDecl *receiverParm = methodDecl->getParamDecl(i);
-                    ParmVarDecl *senderParm = senderMethod->getParamDecl(i);
-                    if (!clazy::isConvertibleTo(senderParm->getType().getTypePtr(), receiverParm->getType().getTypePtrOrNull())) {
-                        std::string msg("Sender's parameters are incompatible with the receiver's");
-                        queueManualFixitWarning(s, msg);
-                        return {};
-                    }
-                }
+                msg = "No such method " + methodName + " in class " + lastRecordDecl->getNameAsString();
             }
 
-            if ((classification & ConnectFlag_QTimerSingleShot) && methodDecl->getNumParams() > 0) {
-                std::string msg = "(QTimer) Fixit not implemented for slot with arguments, use a lambda";
-                queueManualFixitWarning(s, msg);
-                return {};
-            }
-
-            if ((classification & ConnectFlag_QMenuAddAction) && methodDecl->getNumParams() > 0) {
-                std::string msg = "(QMenu) Fixit not implemented for slot with arguments, use a lambda";
-                queueManualFixitWarning(s, msg);
-                return {};
-            }
-
-            DeclContext *context = m_context->lastDecl->getDeclContext();
-
-            bool isSpecialProtectedCase = false;
-            if (!clazy::canTakeAddressOf(methodDecl, context, /*by-ref*/ isSpecialProtectedCase)) {
-                std::string msg = "Can't fix " + clazy::accessString(methodDecl->getAccess()) + ' ' + macroName + ' ' + methodDecl->getQualifiedNameAsString();
-                queueManualFixitWarning(s, msg);
-                return {};
-            }
-
-            std::string qualifiedName;
-            auto *contextRecord = clazy::firstContextOfType<CXXRecordDecl>(m_context->lastDecl->getDeclContext());
-            const bool isInInclude = sm().getMainFileID() != sm().getFileID(locStart);
-
-            if (isSpecialProtectedCase && contextRecord) {
-                // We're inside a derived class trying to take address of a protected base member, must use &Derived::method instead of &Base::method.
-                qualifiedName = contextRecord->getNameAsString() + "::" + methodDecl->getNameAsString();
-            } else {
-                qualifiedName = clazy::getMostNeededQualifiedName(sm(), methodDecl, context, locStart, !isInInclude); // (In includes ignore using directives)
-            }
-
-            CharSourceRange expansionRange = sm().getImmediateExpansionRange(s);
-            SourceRange range = SourceRange(expansionRange.getBegin(), expansionRange.getEnd());
-
-            const std::string functionPointer = '&' + qualifiedName;
-            std::string replacement = functionPointer;
-
-            if ((classification & ConnectFlag_4ArgsConnect) && macroNum == 2) {
-                replacement = implicitCallee + ", " + replacement;
-            }
-
-            fixits.push_back(FixItHint::CreateReplacement(range, replacement));
-            lastRecordDecl = nullptr;
+            queueManualFixitWarning(s, msg);
+            return {};
+        }
+        if (methods.size() != 1) {
+            std::string msg = std::string("Too many overloads (") + std::to_string(methods.size()) + std::string(") for method ") + methodName + " for record "
+                + lastRecordDecl->getNameAsString();
+            queueManualFixitWarning(s, msg);
+            return {};
         } else {
-            Expr *expr = arg;
-            const auto *const record = clazy::getBestDynamicClassType(expr);
-            if (record) {
-                lastRecordDecl = record;
-                if (isQPointer(expr)) {
-                    auto endLoc = clazy::locForNextToken(astContext(), arg->getBeginLoc(), tok::comma);
-                    if (endLoc.isValid()) {
-                        fixits.push_back(FixItHint::CreateInsertion(endLoc, ".data()"));
-                    } else {
-                        return {};
-                    }
+            AccessSpecifierManager *a = m_context->accessSpecifierManager;
+            if (!a) {
+                return {};
+            }
+            const bool isSignal = a->qtAccessSpecifierType(methods[0]) == QtAccessSpecifier_Signal;
+            if (isSignal && macroName == "SLOT") {
+                // The method is actually a signal and the user used SLOT()
+                // bail out with the fixing.
+                std::string msg = std::string("Can't fix. SLOT macro used but method " + methodName + " is a signal");
+                queueManualFixitWarning(s, msg);
+                return {};
+            }
+        }
+
+        auto *methodDecl = methods[0];
+        if (methodDecl->isStatic()) {
+            return {};
+        }
+
+        if (macroNum == 1) {
+            // Save the number of parameters of the signal. The slot should not have more arguments.
+            senderMethod = methodDecl;
+        } else if (macroNum == 2) {
+            const unsigned int numReceiverParams = methodDecl->getNumParams();
+            if (numReceiverParams > senderMethod->getNumParams()) {
+                std::string msg = std::string("Receiver has more parameters (") + std::to_string(methodDecl->getNumParams()) + ") than signal ("
+                    + std::to_string(senderMethod->getNumParams()) + ')';
+                queueManualFixitWarning(s, msg);
+                return {};
+            }
+
+            for (unsigned int i = 0; i < numReceiverParams; ++i) {
+                ParmVarDecl *receiverParm = methodDecl->getParamDecl(i);
+                ParmVarDecl *senderParm = senderMethod->getParamDecl(i);
+                if (!clazy::isConvertibleTo(senderParm->getType().getTypePtr(), receiverParm->getType().getTypePtrOrNull())) {
+                    std::string msg("Sender's parameters are incompatible with the receiver's");
+                    queueManualFixitWarning(s, msg);
+                    return {};
                 }
             }
         }
+
+        if ((classification & ConnectFlag_QTimerSingleShot) && methodDecl->getNumParams() > 0) {
+            std::string msg = "(QTimer) Fixit not implemented for slot with arguments, use a lambda";
+            queueManualFixitWarning(s, msg);
+            return {};
+        }
+
+        if ((classification & ConnectFlag_QMenuAddAction) && methodDecl->getNumParams() > 0) {
+            std::string msg = "(QMenu) Fixit not implemented for slot with arguments, use a lambda";
+            queueManualFixitWarning(s, msg);
+            return {};
+        }
+
+        DeclContext *context = m_context->lastDecl->getDeclContext();
+
+        bool isSpecialProtectedCase = false;
+        if (!clazy::canTakeAddressOf(methodDecl, context, /*by-ref*/ isSpecialProtectedCase)) {
+            std::string msg = "Can't fix " + clazy::accessString(methodDecl->getAccess()) + ' ' + macroName + ' ' + methodDecl->getQualifiedNameAsString();
+            queueManualFixitWarning(s, msg);
+            return {};
+        }
+
+        std::string qualifiedName;
+        auto *contextRecord = clazy::firstContextOfType<CXXRecordDecl>(m_context->lastDecl->getDeclContext());
+        const bool isInInclude = sm().getMainFileID() != sm().getFileID(locStart);
+
+        if (isSpecialProtectedCase && contextRecord) {
+            // We're inside a derived class trying to take address of a protected base member, must use &Derived::method instead of &Base::method.
+            qualifiedName = contextRecord->getNameAsString() + "::" + methodDecl->getNameAsString();
+        } else {
+            qualifiedName = clazy::getMostNeededQualifiedName(sm(), methodDecl, context, locStart, !isInInclude); // (In includes ignore using directives)
+        }
+
+        CharSourceRange expansionRange = sm().getImmediateExpansionRange(s);
+        SourceRange range = SourceRange(expansionRange.getBegin(), expansionRange.getEnd());
+
+        const std::string functionPointer = '&' + qualifiedName;
+        std::string replacement = functionPointer;
+
+        if ((classification & ConnectFlag_4ArgsConnect) && macroNum == 2) {
+            replacement = implicitCallee + ", " + replacement;
+        }
+
+        fixits.push_back(FixItHint::CreateReplacement(range, replacement));
+        lastRecordDecl = nullptr;
     }
 
     return fixits;
